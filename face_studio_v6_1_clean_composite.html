@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#080a0f">
+<title>Face Studio V6.1 — Clean Composite</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.2/dist/body-segmentation.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/selfie_segmentation.js"></script>
+
+<style>
+:root{color-scheme:dark;--bg:#080a0f;--panel:#111722;--line:#273143;--text:#f7f8fb;--muted:#9aa6b8;--a:#8b5cf6;--b:#ec4899;--ok:#34d399;--bad:#fb7185}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{overflow:hidden}.app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);background:#080a0fe8;backdrop-filter:blur(14px);z-index:3}
+.brand{font-weight:800}.status{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%}
+.stage{position:relative;min-height:0;overflow:hidden;background:#020305;display:grid;place-items:center}
+video{display:none}canvas{width:100%;height:100%;display:block;object-fit:contain;background:#020305}
+.badges{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+.badge{font-size:11px;padding:6px 8px;border-radius:999px;background:#080b12cc;border:1px solid #ffffff20;backdrop-filter:blur(10px)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bad);margin-right:5px}.dot.ok{background:var(--ok)}
+.panel{background:#0d1119f2;border-top:1px solid var(--line);padding:10px 12px max(10px,env(safe-area-inset-bottom));display:grid;gap:8px}
+.row{display:grid;grid-template-columns:1fr 1fr 48px;gap:8px}
+button,.fileLabel{border:0;border-radius:13px;padding:12px 10px;font:700 14px system-ui;color:#fff;text-align:center;background:linear-gradient(135deg,var(--a),var(--b));cursor:pointer}
+button.secondary,.fileLabel.secondary{background:#171e2b;border:1px solid var(--line)}button.icon{font-size:19px}input[type=file]{display:none}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.chip{display:flex;justify-content:center;align-items:center;gap:5px;font-size:11px;padding:8px 6px;border-radius:10px;background:#111722;border:1px solid var(--line)}.chip input{accent-color:var(--a)}
+.tune{display:grid;grid-template-columns:76px 1fr 46px;gap:8px;align-items:center;font-size:12px}.tune input{width:100%;accent-color:var(--a)}.val{color:var(--muted);text-align:right}
+.sheet{position:absolute;left:10px;right:10px;bottom:10px;background:#111722e8;border:1px solid var(--line);border-radius:15px;padding:11px;backdrop-filter:blur(12px);display:none}.sheet.show{display:block}.sheet strong{font-size:13px}.sheet p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+@media(min-width:720px){.app{max-width:640px;margin:auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="top"><div class="brand">Face Studio V6.1</div><div class="status" id="status">Loading articulated avatar…</div></header>
+
+<main class="stage">
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="out"></canvas>
+
+<div class="badges">
+<div class="badge"><span id="camDot" class="dot"></span><span id="camText">Camera</span></div>
+<div class="badge"><span id="faceDot" class="dot"></span><span id="faceText">Face</span></div>
+<div class="badge"><span id="poseDot" class="dot"></span><span id="poseText">Body</span></div>
+<div class="badge"><span id="handDot" class="dot"></span><span id="handText">Hands</span></div>
+<div class="badge"><span id="exprDot" class="dot"></span><span id="exprText">Expression</span></div>
+<div class="badge" id="fps">0 fps</div>
+</div>
+
+<div id="sheet" class="sheet"><strong id="sheetTitle"></strong><p id="sheetText"></p></div>
+</main>
+
+<section class="panel">
+<div class="row">
+<label class="fileLabel secondary" for="refFile">Choose woman</label>
+<input id="refFile" type="file" accept="image/*">
+<button id="start" class="icon">▶</button>
+<button id="flip" class="secondary icon">↻</button>
+</div>
+
+<div class="chips">
+<label class="chip"><input id="mirror" type="checkbox" checked>Mirror</label>
+<label class="chip"><input id="avatar" type="checkbox" checked>Avatar</label>
+<label class="chip"><input id="teeth" type="checkbox" checked>Teeth</label>
+<label class="chip"><input id="debug" type="checkbox">Debug</label>
+</div>
+
+<div class="tune"><span>Opacity</span><input id="opacity" type="range" min=".35" max="1" step=".01" value=".98"><span class="val" id="opacityV">98%</span></div>
+<div class="tune"><span>Smoothing</span><input id="smooth" type="range" min="0" max=".9" step=".01" value=".42"><span class="val" id="smoothV">42%</span></div>
+<div class="tune"><span>Body size</span><input id="bodyScale" type="range" min=".78" max="1.30" step=".01" value="1.00"><span class="val" id="bodyScaleV">1.00×</span></div>
+</section>
+</div>
+
+<script type="module">
+import {FaceLandmarker,PoseLandmarker,HandLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/+esm";
+
+const $=id=>document.getElementById(id);
+const video=$("cam"),canvas=$("out"),ctx=canvas.getContext("2d",{alpha:false,desynchronized:true});
+const refImg=new Image();
+
+let vision,faceImgAI,faceVidAI,poseImgAI,poseVidAI,handVidAI,segmenter;
+let stream,running=false,facing="user",lastVideo=-1,refURL=null;
+let refFace=null,refPose=null,refCut=null,faceTriangles=null,refFacePts=null,segmentationWorked=false;
+let prevFace=null,prevPose=null,prevHands=[];
+let fpsFrames=0,fpsStart=performance.now();
+
+const POSE_EDGES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[27,29],[29,31],[24,26],[26,28],[28,30],[30,32]];
+const LIMBS=[
+  [11,13,.28],[13,15,.22],[12,14,.28],[14,16,.22],
+  [23,25,.32],[25,27,.25],[24,26,.32],[26,28,.25]
+];
+
+function msg(t){$("status").textContent=t}
+function note(a,b){$("sheetTitle").textContent=a;$("sheetText").textContent=b;$("sheet").classList.add("show");clearTimeout(note.t);note.t=setTimeout(()=>$("sheet").classList.remove("show"),4300)}
+function bind(id,fmt){const e=$(id),v=$(id+"V"),f=()=>v.textContent=fmt(+e.value);e.oninput=f;f()}
+bind("opacity",v=>Math.round(v*100)+"%");
+bind("smooth",v=>Math.round(v*100)+"%");
+bind("bodyScale",v=>v.toFixed(2)+"×");
+
+async function init(){
+  try{
+    await tf.setBackend("webgl");await tf.ready();
+    segmenter=await bodySegmentation.createSegmenter(
+      bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
+      {runtime:"mediapipe",solutionPath:"https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation",modelType:"general"}
+    );
+  }catch(e){console.warn("segmenter unavailable",e)}
+  try{
+    vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
+    const fm="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+    const pm="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
+    const hm="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+    faceImgAI=await FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:fm,delegate:"GPU"},runningMode:"IMAGE",numFaces:1,outputFaceBlendshapes:true});
+    faceVidAI=await FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:fm,delegate:"GPU"},runningMode:"VIDEO",numFaces:1,outputFaceBlendshapes:true});
+    poseImgAI=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:pm,delegate:"GPU"},runningMode:"IMAGE",numPoses:1});
+    poseVidAI=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:pm,delegate:"GPU"},runningMode:"VIDEO",numPoses:1});
+    handVidAI=await HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:hm,delegate:"GPU"},runningMode:"VIDEO",numHands:2});
+    msg("Ready — choose a woman, then tap ▶");
+  }catch(e){
+    console.error(e);msg("AI failed to load");note("AI error","Reload the page while connected to the internet.");
+  }
+}
+
+$("refFile").onchange=e=>{
+  const f=e.target.files?.[0];if(!f)return;
+  if(refURL)URL.revokeObjectURL(refURL);refURL=URL.createObjectURL(f);
+  refImg.onload=async()=>{
+    try{
+      const fr=faceImgAI.detect(refImg),pr=poseImgAI.detect(refImg);
+      refFace=fr.faceLandmarks?.[0]||null;
+      refPose=pr.landmarks?.[0]||null;
+      if(!refFace){note("No face found","Use a clear image with one visible face.");return}
+      refFacePts=refFace.map(p=>({x:p.x*refImg.naturalWidth,y:p.y*refImg.naturalHeight}));
+      faceTriangles=delaunay(refFacePts).filter(t=>triangleInsideFace(t,refFacePts));
+      await buildCutout();
+      msg(running?"Avatar active":"Woman ready — tap ▶");
+      if(!refPose)note("Face ready","Her face can animate, but use a waist-up or full-body photo for arm/body movement.");
+      else note("Avatar ready",segmentationWorked
+        ?"Background cutout succeeded. Face, arms, torso, blink and smile controls are enabled."
+        :"Using the clean pose-mask fallback so the reference photo cannot appear as a rectangle.");
+    }catch(e){console.error(e);note("Reference error","Could not prepare that image.")}
+  };
+  refImg.src=refURL;
+};
+
+async function buildCutout(){
+  const W=refImg.naturalWidth,H=refImg.naturalHeight;
+  refCut=document.createElement("canvas");refCut.width=W;refCut.height=H;
+  const c=refCut.getContext("2d");c.clearRect(0,0,W,H);
+  segmentationWorked=false;
+
+  if(segmenter){
+    try{
+      const people=await segmenter.segmentPeople(refImg,{multiSegmentation:false,segmentBodyParts:false});
+      if(people?.length){
+        const mask=await bodySegmentation.toMask(
+          people,{r:255,g:255,b:255,a:255},{r:0,g:0,b:0,a:0},false
+        );
+        const mc=document.createElement("canvas");mc.width=mask.width;mc.height=mask.height;
+        mc.getContext("2d").putImageData(mask,0,0);
+        c.drawImage(refImg,0,0,W,H);
+        c.globalCompositeOperation="destination-in";
+        c.filter="blur(2px)";
+        c.drawImage(mc,0,0,W,H);
+        c.filter="none";
+        c.globalCompositeOperation="source-over";
+        segmentationWorked=true;
+        return;
+      }
+    }catch(e){console.warn("segmentation failed, using pose mask",e)}
+  }
+
+  // Reliable fallback for phones: construct a soft person mask from the
+  // reference pose instead of ever drawing the original rectangular photo.
+  if(refPose){
+    const p=refPose.map(q=>({x:q.x*W,y:q.y*H}));
+    const mask=document.createElement("canvas");mask.width=W;mask.height=H;
+    const m=mask.getContext("2d");
+    m.fillStyle="#fff";m.strokeStyle="#fff";m.lineCap="round";m.lineJoin="round";
+
+    // Torso polygon.
+    if(p[11]&&p[12]&&p[24]&&p[23]){
+      m.beginPath();m.moveTo(p[11].x,p[11].y);m.lineTo(p[12].x,p[12].y);
+      m.lineTo(p[24].x,p[24].y);m.lineTo(p[23].x,p[23].y);m.closePath();m.fill();
+    }
+
+    const shoulder=dist(p[11],p[12])||W*.22;
+
+    // Neck + head/hair region.
+    const nose=p[0],earL=p[7],earR=p[8],mouth=p[9];
+    if(nose){
+      const hw=(earL&&earR)?dist(earL,earR)*.82:shoulder*.46;
+      const hh=hw*1.38;
+      m.beginPath();m.ellipse(nose.x,nose.y-hh*.08,hw,hh,0,0,Math.PI*2);m.fill();
+    }
+    if(p[11]&&p[12]){
+      m.lineWidth=shoulder*.28;m.beginPath();
+      m.moveTo((p[11].x+p[12].x)/2,(p[11].y+p[12].y)/2-shoulder*.18);
+      m.lineTo((p[11].x+p[12].x)/2,(p[11].y+p[12].y)/2+shoulder*.18);m.stroke();
+    }
+
+    // Arms and legs as soft capsules.
+    const bones=[[11,13],[13,15],[12,14],[14,16],[23,25],[25,27],[24,26],[26,28]];
+    for(const [a,b] of bones){
+      if(!p[a]||!p[b])continue;
+      const len=dist(p[a],p[b]);
+      m.lineWidth=Math.max(shoulder*.18,len*.25);
+      m.beginPath();m.moveTo(p[a].x,p[a].y);m.lineTo(p[b].x,p[b].y);m.stroke();
+    }
+    // Hands / feet.
+    for(const i of [15,16,27,28]){
+      if(!p[i])continue;
+      m.beginPath();m.arc(p[i].x,p[i].y,shoulder*.12,0,Math.PI*2);m.fill();
+    }
+
+    // Add a little shoulder/hip volume.
+    for(const i of [11,12,23,24]){
+      if(!p[i])continue;m.beginPath();m.arc(p[i].x,p[i].y,shoulder*.16,0,Math.PI*2);m.fill();
+    }
+
+    // Soft edge.
+    const soft=document.createElement("canvas");soft.width=W;soft.height=H;
+    const sc=soft.getContext("2d");sc.filter="blur(8px)";sc.drawImage(mask,0,0);sc.filter="none";
+
+    c.drawImage(refImg,0,0,W,H);
+    c.globalCompositeOperation="destination-in";
+    c.drawImage(soft,0,0);
+    c.globalCompositeOperation="source-over";
+    return;
+  }
+
+  // Face-only last resort: never expose the rectangular source image.
+  if(refFace){
+    const fp=refFace.map(q=>({x:q.x*W,y:q.y*H}));
+    const L=fp[234],R=fp[454],T=fp[10],B=fp[152];
+    const mask=document.createElement("canvas");mask.width=W;mask.height=H;const m=mask.getContext("2d");
+    if(L&&R&&T&&B){
+      const cx=(L.x+R.x)/2,cy=(T.y+B.y)/2,rx=Math.abs(R.x-L.x)*.72,ry=Math.abs(B.y-T.y)*.72;
+      m.fillStyle="#fff";m.beginPath();m.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);m.fill();
+    }
+    c.drawImage(refImg,0,0,W,H);c.globalCompositeOperation="destination-in";c.filter="blur(6px)";c.drawImage(mask,0,0);c.filter="none";c.globalCompositeOperation="source-over";
+  }
+}
+
+async function openCamera(){
+  try{
+    stream?.getTracks().forEach(t=>t.stop());
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing},audio:false})}
+    catch(e){stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false})}
+    video.srcObject=stream;video.muted=true;video.setAttribute("playsinline","");await video.play();
+    running=true;lastVideo=-1;prevFace=null;prevPose=null;prevHands=[];
+    $("camDot").classList.add("ok");$("camText").textContent=facing==="user"?"Front camera":"Back camera";$("start").textContent="■";
+    requestAnimationFrame(loop);
+  }catch(e){note("Camera error",(e.name||"Error")+": "+(e.message||"Could not start camera"))}
+}
+function stop(){running=false;stream?.getTracks().forEach(t=>t.stop());stream=null;$("start").textContent="▶";$("camDot").classList.remove("ok")}
+$("start").onclick=()=>running?stop():openCamera();
+$("flip").onclick=async()=>{facing=facing==="user"?"environment":"user";if(running)await openCamera()};
+
+function resize(){const w=video.videoWidth||720,h=video.videoHeight||1280;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}}
+function proj(l){const m=$("mirror").checked;return l?.map(p=>({x:(m?1-p.x:p.x)*canvas.width,y:p.y*canvas.height,z:p.z||0,visibility:p.visibility??1}))||null}
+function smooth(prev,n){
+  if(!n)return null;if(!prev||prev.length!==n.length)return n.map(p=>({...p}));
+  const s=+$("smooth").value,k=1-s;
+  for(let i=0;i<n.length;i++){prev[i].x+=(n[i].x-prev[i].x)*k;prev[i].y+=(n[i].y-prev[i].y)*k;prev[i].z+=(n[i].z-prev[i].z)*k;prev[i].visibility=n[i].visibility}
+  return prev;
+}
+function drawCamera(){const m=$("mirror").checked;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle="#020305";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.save();if(m){ctx.translate(canvas.width,0);ctx.scale(-1,1)}ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore()}
+
+function refPosePx(){
+  if(!refPose)return null;
+  return refPose.map(p=>({x:p.x*refImg.naturalWidth,y:p.y*refImg.naturalHeight,z:p.z||0,visibility:p.visibility??1}));
+}
+function upright(a){while(a>Math.PI/2)a-=Math.PI;while(a<-Math.PI/2)a+=Math.PI;return a}
+function torso(p){
+  if(!p||![11,12,23,24].every(i=>p[i]))return null;
+  const L=p[11],R=p[12],HL=p[23],HR=p[24];
+  const topY=(L.y+R.y)/2,botY=(HL.y+HR.y)/2;
+  return {cx:(L.x+R.x+HL.x+HR.x)/4,cy:(topY+botY)/2,w:(dist(L,R)+dist(HL,HR))*.56,h:Math.abs(botY-topY)*1.2,angle:upright(Math.atan2(R.y-L.y,R.x-L.x))};
+}
+function dist(a,b){return Math.hypot(b.x-a.x,b.y-a.y)}
+
+function drawTorso(live,ref){
+  const a=torso(live),b=torso(ref);if(!a||!b)return;
+  const bs=+$("bodyScale").value,opacity=+$("opacity").value;
+  const sx=(a.w/b.w)*bs,sy=(a.h/b.h)*bs;
+  ctx.save();ctx.translate(a.cx,a.cy);ctx.rotate(a.angle);ctx.globalAlpha=opacity;
+  // Soft torso silhouette instead of a visible rectangular slab.
+  ctx.beginPath();
+  ctx.moveTo(-a.w*.56,-a.h*.74);ctx.quadraticCurveTo(0,-a.h*.92,a.w*.56,-a.h*.74);
+  ctx.lineTo(a.w*.48,a.h*.72);ctx.quadraticCurveTo(0,a.h*.86,-a.w*.48,a.h*.72);
+  ctx.closePath();ctx.clip();
+  ctx.transform(sx,0,0,sy,-b.cx*sx,-b.cy*sy);
+  ctx.drawImage(refCut,0,0);
+  ctx.restore();
+}
+
+function drawBone(srcA,srcB,dstA,dstB,thickness=.28){
+  if(!srcA||!srcB||!dstA||!dstB)return;
+  const sl=dist(srcA,srcB),dl=dist(dstA,dstB);if(sl<2||dl<2)return;
+  const sa=Math.atan2(srcB.y-srcA.y,srcB.x-srcA.x),da=Math.atan2(dstB.y-dstA.y,dstB.x-dstA.x);
+  const scale=(dl/sl)*+$("bodyScale").value;
+  const srcW=sl*thickness,dstW=srcW*scale;
+  const opacity=+$("opacity").value;
+
+  ctx.save();
+  ctx.globalAlpha=opacity;
+  ctx.translate(dstA.x,dstA.y);
+  ctx.rotate(da);
+  ctx.beginPath();
+  ctx.roundRect(-dstW*.55,-dstW*.60,dl+dstW*1.1,dstW*1.2,dstW*.5);
+  ctx.clip();
+
+  ctx.rotate(-sa);
+  ctx.scale(scale,scale);
+  ctx.translate(-srcA.x,-srcA.y);
+  ctx.drawImage(refCut,0,0);
+  ctx.restore();
+}
+
+function drawRigidHand(srcWrist,dstWrist,srcElbow,dstElbow,sideScale=.95){
+  if(!srcWrist||!dstWrist||!srcElbow||!dstElbow)return;
+  const sl=dist(srcElbow,srcWrist),dl=dist(dstElbow,dstWrist);if(sl<2)return;
+  const scale=(dl/sl)*+$("bodyScale").value*sideScale;
+  const srcAngle=Math.atan2(srcWrist.y-srcElbow.y,srcWrist.x-srcElbow.x);
+  const dstAngle=Math.atan2(dstWrist.y-dstElbow.y,dstWrist.x-dstElbow.x);
+  const radius=sl*.42;
+  ctx.save();
+  ctx.globalAlpha=+$("opacity").value;
+  ctx.translate(dstWrist.x,dstWrist.y);
+  ctx.rotate(dstAngle-srcAngle);
+  ctx.scale(scale,scale);
+  ctx.beginPath();ctx.arc(0,0,radius,0,Math.PI*2);ctx.clip();
+  ctx.drawImage(refCut,-srcWrist.x,-srcWrist.y);
+  ctx.restore();
+}
+
+function affineTriangle(img,s0,s1,s2,d0,d1,d2,alpha){
+  const den=s0.x*(s1.y-s2.y)+s1.x*(s2.y-s0.y)+s2.x*(s0.y-s1.y);if(Math.abs(den)<1e-5)return;
+  const a=(d0.x*(s1.y-s2.y)+d1.x*(s2.y-s0.y)+d2.x*(s0.y-s1.y))/den;
+  const c=(d0.x*(s2.x-s1.x)+d1.x*(s0.x-s2.x)+d2.x*(s1.x-s0.x))/den;
+  const e=(d0.x*(s1.x*s2.y-s2.x*s1.y)+d1.x*(s2.x*s0.y-s0.x*s2.y)+d2.x*(s0.x*s1.y-s1.x*s0.y))/den;
+  const b=(d0.y*(s1.y-s2.y)+d1.y*(s2.y-s0.y)+d2.y*(s0.y-s1.y))/den;
+  const d=(d0.y*(s2.x-s1.x)+d1.y*(s0.x-s2.x)+d2.y*(s1.x-s0.x))/den;
+  const f=(d0.y*(s1.x*s2.y-s2.x*s1.y)+d1.y*(s2.x*s0.y-s0.x*s2.y)+d2.y*(s0.x*s1.y-s1.x*s0.y))/den;
+  ctx.save();ctx.beginPath();ctx.moveTo(d0.x,d0.y);ctx.lineTo(d1.x,d1.y);ctx.lineTo(d2.x,d2.y);ctx.closePath();ctx.clip();
+  ctx.globalAlpha=alpha;ctx.setTransform(a,b,c,d,e,f);ctx.drawImage(img,0,0);ctx.restore();
+}
+function drawFaceMesh(live){
+  if(!refFacePts||!faceTriangles||!live)return;
+  const opacity=+$("opacity").value;
+  const L=live[234],R=live[454],T=live[10],B=live[152];
+  const rL=refFacePts[234],rR=refFacePts[454],rT=refFacePts[10],rB=refFacePts[152];
+
+  // Soft underlay first. It fills pinholes between mesh triangles.
+  if(L&&R&&T&&B&&rL&&rR&&rT&&rB){
+    const cx=(L.x+R.x)/2,cy=(T.y+B.y)/2;
+    const w=Math.abs(R.x-L.x)*1.16,h=Math.abs(B.y-T.y)*1.10;
+    const rcx=(rL.x+rR.x)/2,rcy=(rT.y+rB.y)/2;
+    const rw=Math.abs(rR.x-rL.x)*1.16,rh=Math.abs(rB.y-rT.y)*1.10;
+    ctx.save();
+    ctx.globalAlpha=opacity*.62;
+    ctx.beginPath();ctx.ellipse(cx,cy,w*.50,h*.52,0,0,Math.PI*2);ctx.clip();
+    ctx.drawImage(refImg,rcx-rw/2,rcy-rh/2,rw,rh,cx-w/2,cy-h/2,w,h);
+    ctx.restore();
+  }
+
+  // Dense mesh, slightly translucent so seams disappear into underlay.
+  for(const t of faceTriangles){
+    const d0=live[t[0]],d1=live[t[1]],d2=live[t[2]];
+    if(d0&&d1&&d2)affineTriangle(refImg,refFacePts[t[0]],refFacePts[t[1]],refFacePts[t[2]],d0,d1,d2,opacity*.88);
+  }
+}
+function blendMap(r){const m={};for(const c of r.faceBlendshapes?.[0]?.categories||[])m[c.categoryName]=c.score;return m}
+function v(m,n){return m[n]||0}
+function expressions(face,b){
+  if(!face)return;
+  const blink=Math.max(v(b,"eyeBlinkLeft"),v(b,"eyeBlinkRight"));
+  const smile=(v(b,"mouthSmileLeft")+v(b,"mouthSmileRight"))/2;
+  const jaw=v(b,"jawOpen");
+  const active=blink>.35||smile>.28||jaw>.16;$("exprDot").classList.toggle("ok",active);$("exprText").textContent=active?"Moving":"Expression";
+
+  if(blink>.4){
+    ctx.save();ctx.strokeStyle="rgba(48,31,31,.8)";ctx.lineCap="round";
+    for(const [a,z] of [[33,133],[362,263]]){const p=face[a],q=face[z];if(p&&q){ctx.lineWidth=Math.max(2,dist(p,q)*.07);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.quadraticCurveTo((p.x+q.x)/2,(p.y+q.y)/2+2,q.x,q.y);ctx.stroke()}}
+    ctx.restore();
+  }
+  if($("teeth").checked&&(jaw>.15||smile>.32)){
+    const L=face[78],R=face[308],U=face[13],D=face[14];if(!L||!R||!U||!D)return;
+    const w=dist(L,R),h=Math.max(4,dist(U,D));
+    ctx.save();ctx.beginPath();ctx.ellipse((L.x+R.x)/2,(U.y+D.y)/2,w*.47,h*.56,0,0,Math.PI*2);ctx.clip();
+    ctx.fillStyle="rgba(42,8,14,.92)";ctx.fillRect(Math.min(L.x,R.x),Math.min(U.y,D.y)-5,w,h+10);
+    const th=Math.min(h*.54,w*.15);ctx.fillStyle="rgba(249,247,240,.97)";ctx.fillRect(Math.min(L.x,R.x)+w*.1,Math.min(U.y,D.y),w*.8,th);
+    ctx.restore();
+  }
+}
+
+function drawAvatar(face,pose,b){
+  if(!$("avatar").checked||!refCut)return;
+  const rp=refPosePx();
+  if(rp&&pose){
+    drawTorso(pose,rp);
+    for(const [a,z,w] of LIMBS)drawBone(rp[a],rp[z],pose[a],pose[z],w);
+    drawRigidHand(rp[15],pose[15],rp[13],pose[13]);
+    drawRigidHand(rp[16],pose[16],rp[14],pose[14]);
+  }
+  drawFaceMesh(face);
+  expressions(face,b);
+}
+
+function debug(face,pose,hands){
+  if(!$("debug").checked)return;
+  ctx.save();
+  if(pose){ctx.strokeStyle="rgba(139,92,246,.9)";ctx.fillStyle="rgba(236,72,153,.9)";for(const [a,b] of POSE_EDGES){ctx.beginPath();ctx.moveTo(pose[a].x,pose[a].y);ctx.lineTo(pose[b].x,pose[b].y);ctx.lineWidth=3;ctx.stroke()}}
+  ctx.fillStyle="rgba(52,211,153,.9)";for(const h of hands||[])for(const p of h){ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill()}
+  ctx.restore();
+}
+
+async function loop(ts){
+  if(!running)return;
+  resize();drawCamera();
+  if(faceVidAI&&poseVidAI&&handVidAI&&video.readyState>=2&&video.currentTime!==lastVideo){
+    lastVideo=video.currentTime;
+    try{
+      const doHands=(fpsFrames%3===0);
+      const [fr,pr,hr]=await Promise.all([
+        faceVidAI.detectForVideo(video,ts),
+        poseVidAI.detectForVideo(video,ts),
+        doHands?handVidAI.detectForVideo(video,ts):Promise.resolve(null)
+      ]);
+      if(fr.faceLandmarks?.length){prevFace=smooth(prevFace,proj(fr.faceLandmarks[0]));$("faceDot").classList.add("ok");$("faceText").textContent="Face locked"}else{$("faceDot").classList.remove("ok")}
+      if(pr.landmarks?.length){prevPose=smooth(prevPose,proj(pr.landmarks[0]));$("poseDot").classList.add("ok");$("poseText").textContent="Body locked"}else{$("poseDot").classList.remove("ok")}
+      let hands=prevHands.filter(Boolean);
+      if(hr){
+        const detected=(hr.landmarks||[]).map((h,i)=>{prevHands[i]=smooth(prevHands[i],proj(h));return prevHands[i]});
+        if(detected.length)hands=detected;
+      }
+      $("handDot").classList.toggle("ok",hands.length>0);$("handText").textContent=hands.length?`${hands.length} hand${hands.length>1?"s":""}`:"Hands";
+      drawAvatar(prevFace,prevPose,blendMap(fr));
+      debug(prevFace,prevPose,hands);
+    }catch(e){console.error(e)}
+  }
+  fpsFrames++;if(ts-fpsStart>800){$("fps").textContent=Math.round(fpsFrames*1000/(ts-fpsStart))+" fps";fpsFrames=0;fpsStart=ts}
+  requestAnimationFrame(loop);
+}
+
+function triangleInsideFace(t,pts){
+  const c={x:(pts[t[0]].x+pts[t[1]].x+pts[t[2]].x)/3,y:(pts[t[0]].y+pts[t[1]].y+pts[t[2]].y)/3};
+  const T=pts[10],B=pts[152],L=pts[234],R=pts[454];if(!T||!B||!L||!R)return true;
+  const cx=(L.x+R.x)/2,cy=(T.y+B.y)/2,rx=Math.abs(R.x-L.x)*.60,ry=Math.abs(B.y-T.y)*.57;
+  return ((c.x-cx)**2/(rx*rx)+(c.y-cy)**2/(ry*ry))<1.08;
+}
+function delaunay(points){
+  if(points.length<3)return[];
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const p of points){minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y)}
+  const dx=maxX-minX,dy=maxY-minY,dd=Math.max(dx,dy),mx=(minX+maxX)/2,my=(minY+maxY)/2,n=points.length;
+  const pts=points.concat([{x:mx-20*dd,y:my-20*dd},{x:mx,y:my+20*dd},{x:mx+20*dd,y:my-20*dd}]);
+  let tris=[[n,n+1,n+2]];
+  function circ(t){const A=pts[t[0]],B=pts[t[1]],C=pts[t[2]],D=2*(A.x*(B.y-C.y)+B.x*(C.y-A.y)+C.x*(A.y-B.y));if(Math.abs(D)<1e-8)return{x:0,y:0,r2:-1};const aa=A.x*A.x+A.y*A.y,bb=B.x*B.x+B.y*B.y,cc=C.x*C.x+C.y*C.y,ux=(aa*(B.y-C.y)+bb*(C.y-A.y)+cc*(A.y-B.y))/D,uy=(aa*(C.x-B.x)+bb*(A.x-C.x)+cc*(B.x-A.x))/D;return{x:ux,y:uy,r2:(ux-A.x)**2+(uy-A.y)**2}}
+  for(let i=0;i<n;i++){const p=pts[i],bad=[],edges=[];for(let k=0;k<tris.length;k++){const q=circ(tris[k]);if(q.r2>=0&&(p.x-q.x)**2+(p.y-q.y)**2<=q.r2*1.000001)bad.push(k)}
+    for(let z=bad.length-1;z>=0;z--){const t=tris[bad[z]];tris.splice(bad[z],1);edges.push([t[0],t[1]],[t[1],t[2]],[t[2],t[0]])}
+    const unique=[];for(let e=0;e<edges.length;e++){let dup=false;for(let j=0;j<edges.length;j++)if(e!==j&&edges[e][0]===edges[j][1]&&edges[e][1]===edges[j][0]){dup=true;break}if(!dup)unique.push(edges[e])}
+    for(const e of unique)tris.push([e[0],e[1],i]);
+  }
+  return tris.filter(t=>t[0]<n&&t[1]<n&&t[2]<n);
+}
+
+canvas.width=720;canvas.height=1280;ctx.fillStyle="#020305";ctx.fillRect(0,0,720,1280);ctx.fillStyle="#f5f7fb";ctx.textAlign="center";ctx.font="700 31px system-ui";ctx.fillText("Articulated avatar",360,600);ctx.fillStyle="#9aa6b8";ctx.font="18px system-ui";ctx.fillText("Choose a woman, then tap ▶",360,638);
+init();
+</script>
+</body>
+</html>
