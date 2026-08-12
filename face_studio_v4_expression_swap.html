@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#080a0f">
+<title>Face Studio V4 — Expression Face Swap</title>
+<style>
+:root{color-scheme:dark;--bg:#080a0f;--panel:#111722;--line:#273143;--text:#f7f8fb;--muted:#9aa6b8;--a:#8b5cf6;--b:#ec4899;--ok:#34d399;--bad:#fb7185}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{overflow:hidden}
+.app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);background:#080a0fe8;backdrop-filter:blur(14px);z-index:3}
+.brand{font-weight:800;letter-spacing:-.02em}.status{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%}
+.stage{position:relative;min-height:0;overflow:hidden;background:#020305;display:grid;place-items:center}
+video{display:none}canvas{width:100%;height:100%;display:block;object-fit:contain;background:#020305}
+.badges{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+.badge{font-size:11px;padding:6px 8px;border-radius:999px;background:#080b12cc;border:1px solid #ffffff20;backdrop-filter:blur(10px)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bad);margin-right:5px}.dot.ok{background:var(--ok)}
+.panel{background:#0d1119f2;border-top:1px solid var(--line);padding:10px 12px max(10px,env(safe-area-inset-bottom));display:grid;gap:8px}
+.row{display:grid;grid-template-columns:1fr 1fr 48px;gap:8px}
+button,.fileLabel{border:0;border-radius:13px;padding:12px 10px;font:700 14px system-ui;color:white;text-align:center;background:linear-gradient(135deg,var(--a),var(--b));cursor:pointer}
+button.secondary,.fileLabel.secondary{background:#171e2b;border:1px solid var(--line)}button.icon{font-size:19px}input[type=file]{display:none}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.chip{display:flex;justify-content:center;align-items:center;gap:5px;font-size:11px;padding:8px 6px;border-radius:10px;background:#111722;border:1px solid var(--line)}
+.chip input{accent-color:var(--a)}
+.tune{display:grid;grid-template-columns:74px 1fr 46px;gap:8px;align-items:center;font-size:12px}
+.tune input{width:100%;accent-color:var(--a)}.val{color:var(--muted);text-align:right}
+.sheet{position:absolute;left:10px;right:10px;bottom:10px;background:#111722e8;border:1px solid var(--line);border-radius:15px;padding:11px;backdrop-filter:blur(12px);display:none}
+.sheet.show{display:block}.sheet strong{font-size:13px}.sheet p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+@media(min-width:720px){.app{max-width:640px;margin:auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="top"><div class="brand">Face Studio V4</div><div class="status" id="status">Loading expression AI…</div></header>
+<main class="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="out"></canvas>
+  <div class="badges">
+    <div class="badge"><span id="camDot" class="dot"></span><span id="camText">Camera off</span></div>
+    <div class="badge"><span id="faceDot" class="dot"></span><span id="faceText">Face</span></div>
+    <div class="badge"><span id="poseDot" class="dot"></span><span id="poseText">Body</span></div>
+    <div class="badge"><span id="blinkDot" class="dot"></span><span id="blinkText">Eyes</span></div>
+    <div class="badge"><span id="smileDot" class="dot"></span><span id="smileText">Smile</span></div>
+    <div class="badge" id="fps">0 fps</div>
+  </div>
+  <div id="sheet" class="sheet"><strong id="sheetTitle"></strong><p id="sheetText"></p></div>
+</main>
+
+<section class="panel">
+  <div class="row">
+    <label class="fileLabel secondary" for="refFile">Choose woman</label>
+    <input id="refFile" type="file" accept="image/*">
+    <button id="start" class="icon">▶</button>
+    <button id="flip" class="secondary icon">↻</button>
+  </div>
+  <div class="chips">
+    <label class="chip"><input id="mirror" type="checkbox" checked>Mirror</label>
+    <label class="chip"><input id="swap" type="checkbox" checked>Woman</label>
+    <label class="chip"><input id="teeth" type="checkbox" checked>Teeth</label>
+    <label class="chip"><input id="skeleton" type="checkbox">Body</label>
+  </div>
+  <div class="tune"><span>Blend</span><input id="blend" type="range" min=".3" max="1" step=".01" value=".97"><span class="val" id="blendV">97%</span></div>
+  <div class="tune"><span>Smooth</span><input id="smooth" type="range" min="0" max=".9" step=".01" value=".34"><span class="val" id="smoothV">34%</span></div>
+  <div class="tune"><span>Face size</span><input id="faceScale" type="range" min=".88" max="1.18" step=".01" value="1"><span class="val" id="faceScaleV">1.00×</span></div>
+</section>
+</div>
+
+<script type="module">
+import {FaceLandmarker,PoseLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/+esm";
+
+const $=id=>document.getElementById(id),video=$("cam"),canvas=$("out"),ctx=canvas.getContext("2d",{alpha:false,desynchronized:true});
+const refImg=new Image();
+let vision,faceImageAI,faceVideoAI,poseAI,stream,running=false,facing="user",lastVideo=-1;
+let refLandmarks=null,refPts=null,triangles=null,prevFace=null,prevPose=null,refObjectUrl=null;
+let fpsFrames=0,fpsStart=performance.now();
+
+const POSE_EDGES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[27,29],[29,31],[24,26],[26,28],[28,30],[30,32]];
+const FACE_OVAL=new Set([10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109]);
+
+function msg(t){$("status").textContent=t}
+function note(title,text){$("sheetTitle").textContent=title;$("sheetText").textContent=text;$("sheet").classList.add("show");clearTimeout(note.timer);note.timer=setTimeout(()=>$("sheet").classList.remove("show"),4200)}
+function bindRange(id,fmt){const e=$(id),v=$(id+"V");const f=()=>v.textContent=fmt(+e.value);e.oninput=f;f()}
+bindRange("blend",v=>Math.round(v*100)+"%");bindRange("smooth",v=>Math.round(v*100)+"%");bindRange("faceScale",v=>v.toFixed(2)+"×");
+
+async function initAI(){
+  try{
+    vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
+    const faceModel="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+    faceImageAI=await FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:faceModel,delegate:"GPU"},runningMode:"IMAGE",numFaces:1,outputFaceBlendshapes:true});
+    faceVideoAI=await FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:faceModel,delegate:"GPU"},runningMode:"VIDEO",numFaces:1,outputFaceBlendshapes:true});
+    poseAI=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",delegate:"GPU"},runningMode:"VIDEO",numPoses:1});
+    msg("AI ready — choose a woman, then tap ▶");
+  }catch(e){console.error(e);msg("AI failed to load");note("AI error","Reload the page while connected to the internet.")}
+}
+
+$("refFile").onchange=e=>{
+  const f=e.target.files?.[0];if(!f)return;
+  if(refObjectUrl)URL.revokeObjectURL(refObjectUrl);
+  refObjectUrl=URL.createObjectURL(f);
+  refImg.onload=()=>{
+    try{
+      const r=faceImageAI.detect(refImg);
+      if(!r.faceLandmarks?.length){note("No face detected","Use a clear photo with one visible face.");return}
+      refLandmarks=r.faceLandmarks[0];
+      refPts=refLandmarks.map(p=>({x:p.x*refImg.naturalWidth,y:p.y*refImg.naturalHeight}));
+      triangles=delaunay(refPts).filter(t=>triangleInsideFace(t,refPts));
+      msg(running?"Woman loaded — live swap active":"Woman loaded — tap ▶");
+      note("Woman loaded","Blinking and mouth movement will now follow you. Teeth are synthesized when your smile/mouth opens.");
+    }catch(err){console.error(err);note("Reference error","Could not analyze that image.")}
+  };
+  refImg.src=refObjectUrl;
+};
+
+async function openCamera(){
+  try{
+    if(!window.isSecureContext){note("HTTPS required","Use the GitHub Pages HTTPS link.");return}
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing},audio:false})}
+    catch(e){stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false})}
+    video.srcObject=stream;video.muted=true;video.setAttribute("playsinline","");await video.play();
+    running=true;prevFace=null;prevPose=null;lastVideo=-1;
+    $("camDot").classList.add("ok");$("camText").textContent=facing==="user"?"Front camera":"Back camera";$("start").textContent="■";
+    msg(refLandmarks?"Live expression swap":"Camera live — choose a woman");
+    requestAnimationFrame(loop);
+  }catch(e){console.error(e);msg("Camera failed");note("Camera error",(e.name||"Error")+": "+(e.message||"Could not start camera"))}
+}
+function closeCamera(){running=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;$("start").textContent="▶";$("camDot").classList.remove("ok");$("camText").textContent="Camera off"}
+$("start").onclick=()=>running?closeCamera():openCamera();
+$("flip").onclick=async()=>{facing=facing==="user"?"environment":"user";if(running)await openCamera()};
+
+function resize(){const w=video.videoWidth||720,h=video.videoHeight||1280;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}}
+function project(lms){const m=$("mirror").checked;return lms.map(p=>({x:(m?1-p.x:p.x)*canvas.width,y:p.y*canvas.height,z:p.z||0,visibility:p.visibility??1}))}
+function smooth(prev,next){
+  if(!prev||prev.length!==next.length)return next.map(p=>({...p}));
+  const s=+$("smooth").value,k=1-s;
+  for(let i=0;i<next.length;i++){prev[i].x+=(next[i].x-prev[i].x)*k;prev[i].y+=(next[i].y-prev[i].y)*k;prev[i].z+=(next[i].z-prev[i].z)*k;prev[i].visibility=next[i].visibility}
+  return prev;
+}
+function drawVideo(){const m=$("mirror").checked;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle="#020305";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.save();if(m){ctx.translate(canvas.width,0);ctx.scale(-1,1)}ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore()}
+
+function blendMap(result){
+  const map={};for(const c of result.faceBlendshapes?.[0]?.categories||[])map[c.categoryName]=c.score;return map;
+}
+function value(m,...names){for(const n of names)if(m[n]!=null)return m[n];return 0}
+
+function faceCenterScale(live){
+  const ids=[10,152,234,454],p=ids.map(i=>live[i]).filter(Boolean);
+  if(p.length<4)return live;
+  const cx=(p[2].x+p[3].x)/2,cy=(p[0].y+p[1].y)/2,s=+$("faceScale").value;
+  if(Math.abs(s-1)<.001)return live;
+  return live.map(q=>({x:cx+(q.x-cx)*s,y:cy+(q.y-cy)*s,z:q.z,visibility:q.visibility}));
+}
+
+function affineTriangle(img,s0,s1,s2,d0,d1,d2,alpha){
+  const den=s0.x*(s1.y-s2.y)+s1.x*(s2.y-s0.y)+s2.x*(s0.y-s1.y);
+  if(Math.abs(den)<1e-5)return;
+  const a=(d0.x*(s1.y-s2.y)+d1.x*(s2.y-s0.y)+d2.x*(s0.y-s1.y))/den;
+  const c=(d0.x*(s2.x-s1.x)+d1.x*(s0.x-s2.x)+d2.x*(s1.x-s0.x))/den;
+  const e=(d0.x*(s1.x*s2.y-s2.x*s1.y)+d1.x*(s2.x*s0.y-s0.x*s2.y)+d2.x*(s0.x*s1.y-s1.x*s0.y))/den;
+  const b=(d0.y*(s1.y-s2.y)+d1.y*(s2.y-s0.y)+d2.y*(s0.y-s1.y))/den;
+  const d=(d0.y*(s2.x-s1.x)+d1.y*(s0.x-s2.x)+d2.y*(s1.x-s0.x))/den;
+  const f=(d0.y*(s1.x*s2.y-s2.x*s1.y)+d1.y*(s2.x*s0.y-s0.x*s2.y)+d2.y*(s0.x*s1.y-s1.x*s0.y))/den;
+  ctx.save();ctx.beginPath();ctx.moveTo(d0.x,d0.y);ctx.lineTo(d1.x,d1.y);ctx.lineTo(d2.x,d2.y);ctx.closePath();ctx.clip();
+  ctx.globalAlpha=alpha;ctx.setTransform(a,b,c,d,e,f);ctx.drawImage(img,0,0);ctx.restore();
+}
+function drawSwap(live){
+  if(!$("swap").checked||!triangles||!refPts)return;
+  const alpha=+$("blend").value;
+  for(const t of triangles){const d0=live[t[0]],d1=live[t[1]],d2=live[t[2]];if(d0&&d1&&d2)affineTriangle(refImg,refPts[t[0]],refPts[t[1]],refPts[t[2]],d0,d1,d2,alpha)}
+}
+
+function polygon(indices,pts){
+  ctx.beginPath();indices.forEach((i,k)=>{const p=pts[i];if(k===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y)});ctx.closePath();
+}
+function drawMouthEffects(face,b){
+  const jaw=value(b,"jawOpen"),smile=(value(b,"mouthSmileLeft")+value(b,"mouthSmileRight"))/2;
+  const open=Math.max(jaw,smile*.55);
+  $("smileDot").classList.toggle("ok",open>.18);$("smileText").textContent=open>.18?(smile>.35?"Smile":"Mouth"):"Smile";
+  if(!$("teeth").checked||open<.14)return;
+  const outer=[61,146,91,181,84,17,314,405,321,375,291,409,270,269,0,37,39,40,185];
+  const inner=[78,95,88,178,87,14,317,402,318,324,308,415,310,311,13,82,81,80,191];
+  const L=face[78],R=face[308],U=face[13],D=face[14];
+  if(!L||!R||!U||!D)return;
+  ctx.save();polygon(inner,face);ctx.clip();
+  ctx.fillStyle="rgba(38,8,14,.92)";ctx.fillRect(Math.min(L.x,R.x)-5,Math.min(U.y,D.y)-5,Math.abs(R.x-L.x)+10,Math.abs(D.y-U.y)+10);
+  const w=Math.abs(R.x-L.x),h=Math.max(1,Math.abs(D.y-U.y));
+  const teethH=Math.min(h*.55,w*.18)*(0.55+Math.min(1,smile+jaw)*.45);
+  const x=Math.min(L.x,R.x)+w*.08,y=Math.min(U.y,D.y)+h*.04;
+  ctx.fillStyle="rgba(248,246,238,.96)";
+  roundRect(ctx,x,y,w*.84,teethH,Math.max(2,teethH*.28));ctx.fill();
+  ctx.strokeStyle="rgba(145,135,130,.22)";ctx.lineWidth=Math.max(.5,w*.004);
+  for(let i=1;i<7;i++){const xx=x+w*.84*i/7;ctx.beginPath();ctx.moveTo(xx,y+1);ctx.lineTo(xx,y+teethH-1);ctx.stroke()}
+  ctx.restore();
+}
+function roundRect(c,x,y,w,h,r){r=Math.min(r,w/2,h/2);c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath()}
+
+function drawBlinkOverlay(face,b){
+  const l=value(b,"eyeBlinkLeft"),r=value(b,"eyeBlinkRight"),blink=Math.max(l,r);
+  $("blinkDot").classList.toggle("ok",blink>.42);$("blinkText").textContent=blink>.42?"Blink":"Eyes";
+  ctx.save();ctx.strokeStyle="rgba(68,38,35,.72)";ctx.lineCap="round";
+  if(l>.38){
+    const a=face[33],z=face[133];if(a&&z){ctx.lineWidth=Math.max(2,Math.abs(z.x-a.x)*.08);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo((a.x+z.x)/2,(a.y+z.y)/2+2,z.x,z.y);ctx.stroke()}
+  }
+  if(r>.38){
+    const a=face[362],z=face[263];if(a&&z){ctx.lineWidth=Math.max(2,Math.abs(z.x-a.x)*.08);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo((a.x+z.x)/2,(a.y+z.y)/2+2,z.x,z.y);ctx.stroke()}
+  }
+  ctx.restore();
+}
+
+function drawPose(p){
+  if(!$("skeleton").checked||!p)return;ctx.save();ctx.strokeStyle="rgba(139,92,246,.9)";ctx.fillStyle="rgba(236,72,153,.9)";
+  for(const [a,b] of POSE_EDGES){if(p[a]&&p[b]){ctx.beginPath();ctx.moveTo(p[a].x,p[a].y);ctx.lineTo(p[b].x,p[b].y);ctx.lineWidth=4;ctx.stroke()}}
+  for(const q of p)if((q.visibility??1)>.45){ctx.beginPath();ctx.arc(q.x,q.y,3,0,Math.PI*2);ctx.fill()}ctx.restore();
+}
+
+async function loop(ts){
+  if(!running)return;
+  resize();drawVideo();
+  if(faceVideoAI&&poseAI&&video.readyState>=2&&video.currentTime!==lastVideo){
+    lastVideo=video.currentTime;
+    try{
+      const [fr,pr]=await Promise.all([faceVideoAI.detectForVideo(video,ts),poseAI.detectForVideo(video,ts)]);
+      if(fr.faceLandmarks?.length){
+        prevFace=smooth(prevFace,project(fr.faceLandmarks[0]));
+        const face=faceCenterScale(prevFace);
+        const b=blendMap(fr);
+        $("faceDot").classList.add("ok");$("faceText").textContent="Face locked";
+        if(refLandmarks){drawSwap(face);drawMouthEffects(face,b);drawBlinkOverlay(face,b)}
+      }else{$("faceDot").classList.remove("ok");$("faceText").textContent="Face"}
+      if(pr.landmarks?.length){
+        prevPose=smooth(prevPose,project(pr.landmarks[0]));$("poseDot").classList.add("ok");$("poseText").textContent="Body locked";drawPose(prevPose);
+      }else{$("poseDot").classList.remove("ok");$("poseText").textContent="Body"}
+    }catch(e){console.error(e)}
+  }
+  fpsFrames++;if(ts-fpsStart>800){$("fps").textContent=Math.round(fpsFrames*1000/(ts-fpsStart))+" fps";fpsFrames=0;fpsStart=ts}
+  requestAnimationFrame(loop);
+}
+
+function triangleInsideFace(t,pts){
+  const c={x:(pts[t[0]].x+pts[t[1]].x+pts[t[2]].x)/3,y:(pts[t[0]].y+pts[t[1]].y+pts[t[2]].y)/3};
+  const p10=pts[10],p152=pts[152],p234=pts[234],p454=pts[454];
+  if(!p10||!p152||!p234||!p454)return true;
+  const cx=(p234.x+p454.x)/2,cy=(p10.y+p152.y)/2,rx=Math.abs(p454.x-p234.x)*.58,ry=Math.abs(p152.y-p10.y)*.56;
+  return ((c.x-cx)**2/(rx*rx)+(c.y-cy)**2/(ry*ry))<1.08;
+}
+function delaunay(points){
+  if(points.length<3)return[];
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const p of points){minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y)}
+  const dx=maxX-minX,dy=maxY-minY,dd=Math.max(dx,dy),mx=(minX+maxX)/2,my=(minY+maxY)/2,n=points.length;
+  const pts=points.concat([{x:mx-20*dd,y:my-20*dd},{x:mx,y:my+20*dd},{x:mx+20*dd,y:my-20*dd}]);let tris=[[n,n+1,n+2]];
+  function circ(t){const A=pts[t[0]],B=pts[t[1]],C=pts[t[2]],D=2*(A.x*(B.y-C.y)+B.x*(C.y-A.y)+C.x*(A.y-B.y));if(Math.abs(D)<1e-8)return{x:0,y:0,r2:-1};const aa=A.x*A.x+A.y*A.y,bb=B.x*B.x+B.y*B.y,cc=C.x*C.x+C.y*C.y,ux=(aa*(B.y-C.y)+bb*(C.y-A.y)+cc*(A.y-B.y))/D,uy=(aa*(C.x-B.x)+bb*(A.x-C.x)+cc*(B.x-A.x))/D;return{x:ux,y:uy,r2:(ux-A.x)**2+(uy-A.y)**2}}
+  for(let i=0;i<n;i++){const p=pts[i],bad=[],edges=[];for(let k=0;k<tris.length;k++){const q=circ(tris[k]);if(q.r2>=0&&(p.x-q.x)**2+(p.y-q.y)**2<=q.r2*1.000001)bad.push(k)}
+    for(let z=bad.length-1;z>=0;z--){const t=tris[bad[z]];tris.splice(bad[z],1);edges.push([t[0],t[1]],[t[1],t[2]],[t[2],t[0]])}
+    const unique=[];for(let e=0;e<edges.length;e++){let dup=false;for(let j=0;j<edges.length;j++)if(e!==j&&edges[e][0]===edges[j][1]&&edges[e][1]===edges[j][0]){dup=true;break}if(!dup)unique.push(edges[e])}
+    for(const e of unique)tris.push([e[0],e[1],i]);
+  }return tris.filter(t=>t[0]<n&&t[1]<n&&t[2]<n);
+}
+
+canvas.width=720;canvas.height=1280;ctx.fillStyle="#020305";ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle="#f5f7fb";ctx.textAlign="center";ctx.font="700 31px system-ui";ctx.fillText("Expression face swap",360,600);
+ctx.fillStyle="#9aa6b8";ctx.font="18px system-ui";ctx.fillText("Choose a woman, then tap ▶",360,638);
+initAI();
+</script>
+</body>
+</html>
