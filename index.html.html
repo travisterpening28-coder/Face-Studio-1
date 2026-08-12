@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#090b10">
+<title>Live Face Studio Mobile</title>
+<style>
+:root{color-scheme:dark;--bg:#090b10;--card:#121722;--line:#263043;--text:#f7f8fb;--muted:#9aa6b8;--a:#8b5cf6;--b:#ec4899;--ok:#34d399;--bad:#fb7185}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;height:100%}
+body{overflow:hidden}
+.app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.top{padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid var(--line);background:#090b10e8;backdrop-filter:blur(14px);z-index:2}
+.brand{font-weight:800;letter-spacing:-.02em}
+.status{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stage{position:relative;min-height:0;background:#030407;display:grid;place-items:center;overflow:hidden}
+video{display:none}
+canvas{width:100%;height:100%;object-fit:contain;display:block;background:#030407}
+.badges{position:absolute;top:10px;left:10px;display:flex;gap:7px;pointer-events:none}
+.badge{font-size:11px;padding:6px 8px;border-radius:999px;background:#080b12c9;border:1px solid #ffffff20;backdrop-filter:blur(8px)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bad);margin-right:5px}.dot.ok{background:var(--ok)}
+.controls{background:#0d1119f2;border-top:1px solid var(--line);padding:10px 12px max(10px,env(safe-area-inset-bottom));display:grid;gap:8px}
+.primaryRow{display:grid;grid-template-columns:1fr 1fr 48px;gap:8px}
+button,.fileLabel{border:0;border-radius:13px;padding:12px 10px;font:700 14px system-ui;color:#fff;text-align:center;cursor:pointer;background:linear-gradient(135deg,var(--a),var(--b))}
+button.secondary,.fileLabel.secondary{background:#171e2b;border:1px solid var(--line)}
+button.icon{font-size:19px;padding:8px}
+input[type=file]{display:none}
+.options{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.chip{display:flex;align-items:center;justify-content:center;gap:6px;background:#111722;border:1px solid var(--line);border-radius:11px;padding:8px;font-size:12px;color:#dbe4ef}
+.chip input{accent-color:var(--a)}
+.tune{display:grid;grid-template-columns:76px 1fr 42px;gap:8px;align-items:center;font-size:12px;color:#dbe4ef}
+.tune input{width:100%;accent-color:var(--a)}.value{text-align:right;color:var(--muted)}
+.sheet{position:absolute;left:10px;right:10px;bottom:10px;background:#111722e8;border:1px solid var(--line);border-radius:15px;padding:11px;backdrop-filter:blur(12px);display:none}
+.sheet.show{display:block}.sheet strong{font-size:13px}.sheet p{margin:5px 0 0;font-size:12px;line-height:1.4;color:var(--muted)}
+@media(min-width:700px){.app{max-width:620px;margin:auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">Live Face Studio</div>
+    <div class="status" id="status">Loading face AI…</div>
+  </header>
+
+  <main class="stage">
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="out"></canvas>
+    <div class="badges">
+      <div class="badge"><span id="camDot" class="dot"></span><span id="camText">Camera off</span></div>
+      <div class="badge"><span id="faceDot" class="dot"></span><span id="faceText">AI loading</span></div>
+      <div class="badge" id="fps">0 fps</div>
+    </div>
+    <div id="sheet" class="sheet"><strong id="sheetTitle"></strong><p id="sheetText"></p></div>
+  </main>
+
+  <section class="controls">
+    <div class="primaryRow">
+      <label for="refFile" class="fileLabel secondary">Choose woman</label>
+      <input id="refFile" type="file" accept="image/*">
+      <button id="start" class="icon" aria-label="Start camera">▶</button>
+      <button id="flip" class="secondary icon" aria-label="Flip camera">↻</button>
+    </div>
+
+    <div class="options">
+      <label class="chip"><input id="mirror" type="checkbox" checked> Mirror</label>
+      <label class="chip"><input id="meshOnly" type="checkbox" checked> Face only</label>
+      <label class="chip"><input id="debug" type="checkbox"> Mesh</label>
+    </div>
+
+    <div class="tune"><span>Blend</span><input id="blend" type="range" min=".2" max="1" step=".01" value=".94"><span class="value" id="blendV">94%</span></div>
+    <div class="tune"><span>Smooth</span><input id="smooth" type="range" min="0" max=".9" step=".01" value=".42"><span class="value" id="smoothV">42%</span></div>
+  </section>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/+esm";
+
+const $=id=>document.getElementById(id);
+const video=$("cam"), canvas=$("out"), ctx=canvas.getContext("2d",{alpha:false,desynchronized:true});
+const refImg=new Image();
+let vision, imageTracker, videoTracker, stream, running=false, facing="user";
+let refLandmarks=null, refPoints=null, triangles=null, prevLive=null, lastVideo=-1;
+let lastFps=performance.now(), frames=0;
+
+function msg(t){$("status").textContent=t}
+function note(title,text){
+  $("sheetTitle").textContent=title;$("sheetText").textContent=text;$("sheet").classList.add("show");
+  clearTimeout(note.timer);note.timer=setTimeout(()=>$("sheet").classList.remove("show"),4200);
+}
+function updateRange(id,fmt){const e=$(id),v=$(id+"V");const f=()=>v.textContent=fmt(+e.value);e.oninput=f;f()}
+updateRange("blend",v=>Math.round(v*100)+"%");
+updateRange("smooth",v=>Math.round(v*100)+"%");
+
+async function initAI(){
+  try{
+    vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
+    const common={
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"GPU"},
+      numFaces:1,minFaceDetectionConfidence:.5,minFacePresenceConfidence:.5,minTrackingConfidence:.5
+    };
+    imageTracker=await FaceLandmarker.createFromOptions(vision,{...common,runningMode:"IMAGE"});
+    videoTracker=await FaceLandmarker.createFromOptions(vision,{...common,runningMode:"VIDEO"});
+    $("faceText").textContent="AI ready";$("faceDot").classList.add("ok");msg("Choose a portrait, then tap ▶");
+  }catch(e){
+    console.error(e);$("faceText").textContent="AI error";msg("Face AI could not load. Check your connection.");
+  }
+}
+
+async function openCamera(){
+  try{
+    if(!window.isSecureContext){
+      msg("Camera blocked: page is not secure");
+      note("HTTPS required","This phone browser will not allow camera access from a downloaded/local HTML file. Open this page from an HTTPS web address.");
+      return;
+    }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      msg("Camera API unavailable");
+      note("Browser limitation","Open this page in Safari on iPhone or Chrome on Android, from an HTTPS address.");
+      return;
+    }
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+
+    // Start with minimal constraints for maximum mobile compatibility.
+    // If the requested facing mode is unavailable, retry with any camera.
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:facing},audio:false
+      });
+    }catch(firstErr){
+      console.warn("Preferred camera failed, retrying default camera", firstErr);
+      stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+    }
+
+    video.srcObject=stream;
+    video.setAttribute("playsinline","");
+    video.muted=true;
+    await video.play();
+
+    running=true;prevLive=null;lastVideo=-1;
+    $("camDot").classList.add("ok");$("camText").textContent=facing==="user"?"Front camera":"Camera live";
+    $("start").textContent="■";msg(refLandmarks?"Live transformation active":"Camera ready — choose a portrait");
+    requestAnimationFrame(loop);
+  }catch(e){
+    console.error("Camera error:", e.name, e.message, e);
+    let text="Could not start camera.";
+    if(e.name==="NotAllowedError") text="Camera permission was denied. Allow camera access for this site in browser settings.";
+    else if(e.name==="NotFoundError") text="No usable camera was found.";
+    else if(e.name==="NotReadableError") text="The camera may already be in use by another app.";
+    else if(e.name==="OverconstrainedError") text="The requested camera mode is not available.";
+    msg(text);
+    note("Camera error", text + " Error: " + (e.name || "unknown"));
+  }
+}
+function closeCamera(){
+  running=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;
+  $("camDot").classList.remove("ok");$("camText").textContent="Camera off";$("start").textContent="▶";
+}
+$("start").onclick=()=>running?closeCamera():openCamera();
+$("flip").onclick=async()=>{facing=facing==="user"?"environment":"user";if(running)await openCamera()};
+
+$("refFile").onchange=e=>{
+  const f=e.target.files?.[0];if(!f)return;
+  const url=URL.createObjectURL(f);
+  refImg.onload=()=>{
+    try{
+      if(!imageTracker){note("AI still loading","Try choosing the portrait again in a moment.");return}
+      const res=imageTracker.detect(refImg);
+      if(!res.faceLandmarks?.length){refLandmarks=null;msg("No face found in that portrait");note("Portrait not detected","Choose a clear, front-facing photo with one visible face.");return}
+      refLandmarks=res.faceLandmarks[0];
+      prepareReference();
+      msg(running?"Live transformation active":"Portrait ready — tap ▶");
+      note("Portrait ready","Your chosen face will now follow your live facial geometry.");
+    }catch(err){console.error(err);msg("Could not analyze portrait")}
+  };
+  refImg.src=url;
+};
+
+function prepareReference(){
+  const W=refImg.naturalWidth,H=refImg.naturalHeight;
+  refPoints=refLandmarks.map(p=>({x:p.x*W,y:p.y*H}));
+  triangles=delaunay(refPoints);
+  // Keep mostly central face triangles, excluding far iris/edge artifacts.
+  const xs=refPoints.map(p=>p.x),ys=refPoints.map(p=>p.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const cx=(minX+maxX)/2,cy=(minY+maxY)/2,rx=(maxX-minX)*.52,ry=(maxY-minY)*.55;
+  triangles=triangles.filter(t=>{
+    const p0=refPoints[t[0]],p1=refPoints[t[1]],p2=refPoints[t[2]];
+    const x=(p0.x+p1.x+p2.x)/3,y=(p0.y+p1.y+p2.y)/3;
+    return ((x-cx)*(x-cx)/(rx*rx)+(y-cy)*(y-cy)/(ry*ry))<1.02;
+  });
+}
+
+function resizeCanvas(){
+  const w=video.videoWidth||720,h=video.videoHeight||1280;
+  if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}
+}
+function smoothPoints(next){
+  if(!prevLive){prevLive=next.map(p=>({...p}));return prevLive}
+  const s=+$("smooth").value,k=1-s;
+  for(let i=0;i<next.length;i++){prevLive[i].x+= (next[i].x-prevLive[i].x)*k;prevLive[i].y+=(next[i].y-prevLive[i].y)*k}
+  return prevLive;
+}
+function livePoints(lms){
+  const mir=$("mirror").checked;
+  return lms.map(p=>({x:(mir?1-p.x:p.x)*canvas.width,y:p.y*canvas.height}));
+}
+
+function affineTriangle(img,s0,s1,s2,d0,d1,d2,alpha){
+  const den=(s0.x*(s1.y-s2.y)+s1.x*(s2.y-s0.y)+s2.x*(s0.y-s1.y));
+  if(Math.abs(den)<1e-4)return;
+  const a=(d0.x*(s1.y-s2.y)+d1.x*(s2.y-s0.y)+d2.x*(s0.y-s1.y))/den;
+  const c=(d0.x*(s2.x-s1.x)+d1.x*(s0.x-s2.x)+d2.x*(s1.x-s0.x))/den;
+  const e=(d0.x*(s1.x*s2.y-s2.x*s1.y)+d1.x*(s2.x*s0.y-s0.x*s2.y)+d2.x*(s0.x*s1.y-s1.x*s0.y))/den;
+  const b=(d0.y*(s1.y-s2.y)+d1.y*(s2.y-s0.y)+d2.y*(s0.y-s1.y))/den;
+  const d=(d0.y*(s2.x-s1.x)+d1.y*(s0.x-s2.x)+d2.y*(s1.x-s0.x))/den;
+  const f=(d0.y*(s1.x*s2.y-s2.x*s1.y)+d1.y*(s2.x*s0.y-s0.x*s2.y)+d2.y*(s0.x*s1.y-s1.x*s0.y))/den;
+  ctx.save();
+  ctx.beginPath();ctx.moveTo(d0.x,d0.y);ctx.lineTo(d1.x,d1.y);ctx.lineTo(d2.x,d2.y);ctx.closePath();ctx.clip();
+  ctx.globalAlpha=alpha;
+  ctx.setTransform(a,b,c,d,e,f);
+  ctx.drawImage(img,0,0);
+  ctx.restore();
+}
+
+function drawSwap(live){
+  if(!triangles||!refPoints)return;
+  const alpha=+$("blend").value;
+  // A soft underlay reduces tiny cracks between warped triangles.
+  if(!$("meshOnly").checked){
+    const ids=[10,152,234,454], p=ids.map(i=>live[i]).filter(Boolean);
+    if(p.length===4){
+      const cx=(p[2].x+p[3].x)/2,cy=(p[0].y+p[1].y)/2,w=Math.abs(p[3].x-p[2].x)*1.2,h=Math.abs(p[1].y-p[0].y)*1.2;
+      ctx.save();ctx.globalAlpha=alpha*.18;ctx.drawImage(refImg,cx-w/2,cy-h/2,w,h);ctx.restore();
+    }
+  }
+  for(const t of triangles){
+    const s0=refPoints[t[0]],s1=refPoints[t[1]],s2=refPoints[t[2]];
+    const d0=live[t[0]],d1=live[t[1]],d2=live[t[2]];
+    if(d0&&d1&&d2)affineTriangle(refImg,s0,s1,s2,d0,d1,d2,alpha);
+  }
+}
+function drawDebug(live){
+  if(!$("debug").checked)return;
+  ctx.save();ctx.fillStyle="rgba(52,211,153,.85)";
+  for(let i=0;i<live.length;i+=5){const p=live[i];ctx.beginPath();ctx.arc(p.x,p.y,1.3,0,Math.PI*2);ctx.fill()}
+  ctx.restore();
+}
+
+function drawCamera(){
+  const mir=$("mirror").checked;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle="#030407";ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.save();if(mir){ctx.translate(canvas.width,0);ctx.scale(-1,1)}ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore();
+}
+
+function loop(ts){
+  if(!running)return;
+  resizeCanvas();drawCamera();
+  if(videoTracker&&video.readyState>=2&&video.currentTime!==lastVideo){
+    lastVideo=video.currentTime;
+    try{
+      const result=videoTracker.detectForVideo(video,ts);
+      if(result.faceLandmarks?.length){
+        const live=smoothPoints(livePoints(result.faceLandmarks[0]));
+        $("faceText").textContent="Face locked";$("faceDot").classList.add("ok");
+        if(refLandmarks)drawSwap(live);
+        drawDebug(live);
+      }else{$("faceText").textContent="Find face";$("faceDot").classList.remove("ok")}
+    }catch(e){console.error(e)}
+  }
+  frames++;
+  if(ts-lastFps>800){$("fps").textContent=Math.round(frames*1000/(ts-lastFps))+" fps";frames=0;lastFps=ts}
+  requestAnimationFrame(loop);
+}
+
+/* Bowyer-Watson Delaunay triangulation. Runs only once when a portrait is selected. */
+function delaunay(points){
+  if(points.length<3)return[];
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const p of points){minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y)}
+  const dx=maxX-minX,dy=maxY-minY,d=Math.max(dx,dy),mx=(minX+maxX)/2,my=(minY+maxY)/2;
+  const pts=points.concat([{x:mx-20*d,y:my-20*d},{x:mx,y:my+20*d},{x:mx+20*d,y:my-20*d}]);
+  const n=points.length,superIds=[n,n+1,n+2];
+  let tris=[superIds];
+  function circum(t){
+    const A=pts[t[0]],B=pts[t[1]],C=pts[t[2]];
+    const D=2*(A.x*(B.y-C.y)+B.x*(C.y-A.y)+C.x*(A.y-B.y));
+    if(Math.abs(D)<1e-8)return{x:0,y:0,r2:-1};
+    const a=A.x*A.x+A.y*A.y,b=B.x*B.x+B.y*B.y,c=C.x*C.x+C.y*C.y;
+    const ux=(a*(B.y-C.y)+b*(C.y-A.y)+c*(A.y-B.y))/D;
+    const uy=(a*(C.x-B.x)+b*(A.x-C.x)+c*(B.x-A.x))/D;
+    const rx=ux-A.x,ry=uy-A.y;return{x:ux,y:uy,r2:rx*rx+ry*ry};
+  }
+  for(let i=0;i<n;i++){
+    const p=pts[i],bad=[],edges=[];
+    for(let k=0;k<tris.length;k++){const cc=circum(tris[k]);if(cc.r2>=0&&((p.x-cc.x)**2+(p.y-cc.y)**2)<=cc.r2*1.000001)bad.push(k)}
+    for(let z=bad.length-1;z>=0;z--){
+      const t=tris[bad[z]];tris.splice(bad[z],1);
+      edges.push([t[0],t[1]],[t[1],t[2]],[t[2],t[0]]);
+    }
+    const unique=[];
+    for(let e=0;e<edges.length;e++){
+      let dup=false;
+      for(let j=0;j<edges.length;j++)if(e!==j&&edges[e][0]===edges[j][1]&&edges[e][1]===edges[j][0]){dup=true;break}
+      if(!dup)unique.push(edges[e]);
+    }
+    for(const e of unique)tris.push([e[0],e[1],i]);
+  }
+  return tris.filter(t=>t[0]<n&&t[1]<n&&t[2]<n);
+}
+
+// Placeholder frame
+canvas.width=720;canvas.height=1280;
+ctx.fillStyle="#030407";ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle="#f4f6fb";ctx.textAlign="center";ctx.font="700 32px system-ui";ctx.fillText("Choose a portrait",360,610);
+ctx.fillStyle="#98a2b3";ctx.font="18px system-ui";ctx.fillText("then tap ▶ to use your phone camera",360,648);
+
+if(!window.isSecureContext){
+  msg("Camera unavailable from local file");
+  note("Open from HTTPS","Downloaded HTML files usually open as file:// pages. Phone browsers block live camera access there. This page needs to be hosted at an HTTPS address.");
+}else if(!navigator.mediaDevices?.getUserMedia){
+  msg("Camera API unavailable in this browser");
+  note("Browser unsupported","Use current Safari on iPhone or Chrome on Android.");
+}
+initAI();
+</script>
+</body>
+</html>
