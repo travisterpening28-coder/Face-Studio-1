@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#080a0f">
+<title>Face Studio V10 — Burst AI</title>
+<style>
+:root{color-scheme:dark;--bg:#080a0f;--panel:#111722;--line:#273143;--text:#f7f8fb;--muted:#9aa6b8;--a:#8b5cf6;--b:#ec4899;--ok:#34d399;--bad:#fb7185;--warn:#fbbf24}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{overflow:hidden}
+.app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);background:#080a0fe8;backdrop-filter:blur(14px);z-index:3}
+.brand{font-weight:800}
+.status{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62%}
+.stage{position:relative;min-height:0;overflow:auto;background:#020305}
+.mediaWrap{padding:10px;display:grid;gap:10px}
+video,canvas,img{width:100%;display:block;border-radius:16px;background:#020305}
+#cam{aspect-ratio:1/1;object-fit:cover}
+.previewCard{background:#0d1119;border:1px solid var(--line);border-radius:16px;padding:8px}
+.previewLabel{font-size:12px;color:var(--muted);margin:0 0 6px 2px}
+.badges{position:sticky;top:0;z-index:2;display:flex;gap:6px;flex-wrap:wrap;padding:10px;background:linear-gradient(180deg,#020305,#020305b8,#02030500)}
+.badge{font-size:11px;padding:6px 8px;border-radius:999px;background:#080b12cc;border:1px solid #ffffff20;backdrop-filter:blur(10px)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bad);margin-right:5px}.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
+.panel{background:#0d1119f2;border-top:1px solid var(--line);padding:10px 12px max(10px,env(safe-area-inset-bottom));display:grid;gap:8px}
+.row{display:grid;gap:8px}
+.row3{display:grid;grid-template-columns:1fr 1fr 52px;gap:8px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.rowTime{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+button,.fileLabel,select,input[type=text]{border:0;border-radius:13px;padding:12px 10px;font:700 14px system-ui;color:white;text-align:center;background:linear-gradient(135deg,var(--a),var(--b));cursor:pointer}
+button.secondary,.fileLabel.secondary,select,input[type=text]{background:#171e2b;border:1px solid var(--line)}
+button.icon{font-size:19px}
+button[disabled]{opacity:.55;cursor:not-allowed}
+input[type=file]{display:none}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.chip{display:flex;justify-content:center;align-items:center;gap:5px;font-size:11px;padding:8px 6px;border-radius:10px;background:#111722;border:1px solid var(--line)}
+.chip input{accent-color:var(--a)}
+.info{font-size:11px;color:var(--muted);line-height:1.45;background:#0b1018;border:1px solid var(--line);padding:9px 10px;border-radius:11px}
+.progress{height:9px;background:#121824;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.bar{height:100%;width:0;background:linear-gradient(90deg,var(--a),var(--b));transition:width .2s}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.resultActions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.hidden{display:none !important}
+small{color:var(--muted)}
+@media(min-width:720px){.app{max-width:640px;margin:auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="top">
+  <div class="brand">Face Studio V10</div>
+  <div class="status" id="status">Loading Burst AI…</div>
+</header>
+
+<main class="stage">
+  <div class="badges">
+    <div class="badge"><span id="camDot" class="dot"></span><span id="camText">Camera</span></div>
+    <div class="badge"><span id="hfDot" class="dot"></span><span id="hfText">LivePortrait</span></div>
+    <div class="badge"><span id="imgDot" class="dot"></span><span id="imgText">Woman</span></div>
+    <div class="badge"><span id="clipDot" class="dot"></span><span id="clipText">Clip</span></div>
+    <div class="badge"><span id="queueDot" class="dot"></span><span id="queueText">Idle</span></div>
+  </div>
+
+  <div class="mediaWrap">
+    <div class="previewCard">
+      <div class="previewLabel">Live square camera</div>
+      <video id="cam" playsinline muted autoplay></video>
+    </div>
+
+    <div class="previewCard hidden" id="womanCard">
+      <div class="previewLabel">Selected woman</div>
+      <img id="womanPreview" alt="Selected woman preview">
+    </div>
+
+    <div class="previewCard hidden" id="clipCard">
+      <div class="previewLabel">Recorded driving clip</div>
+      <video id="clipPreview" playsinline controls loop></video>
+    </div>
+
+    <div class="previewCard hidden" id="resultCard">
+      <div class="previewLabel">AI result</div>
+      <video id="resultVideo" playsinline controls></video>
+      <div class="resultActions" style="margin-top:8px">
+        <a id="saveLink" class="fileLabel secondary" href="#" download="face_studio_burst_ai.mp4">Save video</a>
+        <button id="shareBtn" class="secondary">Share</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<section class="panel">
+  <div class="row3">
+    <label class="fileLabel secondary" for="imgFile">Choose woman</label>
+    <input id="imgFile" type="file" accept="image/*">
+    <button id="startCam" class="icon">▶</button>
+    <button id="flipCam" class="secondary icon">↻</button>
+  </div>
+
+  <div class="rowTime">
+    <button class="secondary durBtn" data-seconds="2">2 sec</button>
+    <button class="secondary durBtn" data-seconds="5">5 sec</button>
+    <button class="secondary durBtn" data-seconds="10">10 sec</button>
+  </div>
+
+  <div class="row2">
+    <button id="recordBtn">Record</button>
+    <button id="renderBtn" class="secondary">Render AI</button>
+  </div>
+
+  <div class="chips">
+    <label class="chip"><input id="mirror" type="checkbox" checked>Mirror</label>
+    <label class="chip"><input id="relative" type="checkbox" checked>Relative</label>
+    <label class="chip"><input id="crop" type="checkbox" checked>Crop</label>
+    <label class="chip"><input id="pasteback" type="checkbox" checked>Paste back</label>
+  </div>
+
+  <div class="row">
+    <small>Space: <span class="mono" id="spaceNameView">KlingTeam/LivePortrait</span></small>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <div class="info" id="log">
+      Tip: use a clear front-facing photo for the woman, then record a short square clip where you blink, smile, and move your head a little. Short clips are faster and work better with free GPU limits.
+    </div>
+  </div>
+</section>
+</div>
+
+<script type="module">
+import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client/+esm";
+
+const $ = id => document.getElementById(id);
+const video = $("cam");
+const clipPreview = $("clipPreview");
+const resultVideo = $("resultVideo");
+const womanPreview = $("womanPreview");
+const offCanvas = document.createElement("canvas");
+const offCtx = offCanvas.getContext("2d");
+const recCanvas = document.createElement("canvas");
+const recCtx = recCanvas.getContext("2d");
+const SPACE_ID = "KlingTeam/LivePortrait";
+
+let stream = null;
+let facing = "user";
+let drawLoopId = 0;
+let selectedSeconds = 5;
+let womanFile = null;
+let clipBlob = null;
+let clipFile = null;
+let clipURL = null;
+let resultURL = null;
+let recorder = null;
+let chunks = [];
+let client = null;
+let lastApiInfo = null;
+
+function setStatus(t){ $("status").textContent = t; }
+function setLog(html){ $("log").innerHTML = html; }
+function setDot(name, state, text){
+  const dot = $(name + "Dot"), txt = $(name + "Text");
+  dot.classList.remove("ok","warn");
+  if(state === "ok") dot.classList.add("ok");
+  else if(state === "warn") dot.classList.add("warn");
+  if(text) txt.textContent = text;
+}
+function setBar(v){ $("bar").style.width = Math.max(0, Math.min(100, v)) + "%"; }
+function show(id, yes=true){ $(id).classList.toggle("hidden", !yes); }
+function chooseMimeType(){
+  const list = [
+    "video/mp4;codecs=h264,aac",
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm"
+  ];
+  for(const type of list){
+    try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type; }catch(_){}
+  }
+  return "";
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+function getSquareSourceRect(){
+  const vw = video.videoWidth || 1080;
+  const vh = video.videoHeight || 1920;
+  const size = Math.min(vw, vh);
+  const sx = (vw - size) / 2;
+  const sy = (vh - size) / 2;
+  return { sx, sy, size };
+}
+
+function startPreviewLoop(){
+  cancelAnimationFrame(drawLoopId);
+  const paint = () => {
+    if(video.readyState >= 2){
+      const {sx, sy, size} = getSquareSourceRect();
+      offCanvas.width = 720; offCanvas.height = 720;
+      offCtx.save();
+      offCtx.clearRect(0,0,offCanvas.width,offCanvas.height);
+      if($("mirror").checked){
+        offCtx.translate(offCanvas.width, 0);
+        offCtx.scale(-1, 1);
+      }
+      offCtx.drawImage(video, sx, sy, size, size, 0, 0, offCanvas.width, offCanvas.height);
+      offCtx.restore();
+      video.style.objectPosition = "center";
+    }
+    drawLoopId = requestAnimationFrame(paint);
+  };
+  paint();
+}
+
+async function openCamera(){
+  try{
+    stream?.getTracks().forEach(t=>t.stop());
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:facing}, audio:true});
+    }catch(e){
+      stream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+    }
+    video.srcObject = stream;
+    video.muted = true;
+    await video.play();
+    setDot("cam","ok",facing === "user" ? "Front camera" : "Back camera");
+    $("startCam").textContent = "■";
+    startPreviewLoop();
+    setStatus("Camera ready");
+  }catch(err){
+    console.error(err);
+    setStatus("Camera error");
+    setLog(`<b>Camera error:</b> ${err.message || err}`);
+    setDot("cam","warn","Camera error");
+  }
+}
+
+function stopCamera(){
+  stream?.getTracks().forEach(t=>t.stop());
+  stream = null;
+  cancelAnimationFrame(drawLoopId);
+  video.srcObject = null;
+  $("startCam").textContent = "▶";
+  setDot("cam",null,"Camera");
+  setStatus("Camera stopped");
+}
+
+$("startCam").onclick = async () => {
+  if(stream) stopCamera();
+  else await openCamera();
+};
+$("flipCam").onclick = async () => {
+  facing = facing === "user" ? "environment" : "user";
+  if(stream) await openCamera();
+};
+
+document.querySelectorAll(".durBtn").forEach(btn => {
+  const update = () => {
+    document.querySelectorAll(".durBtn").forEach(b => b.style.outline = "none");
+    btn.style.outline = "2px solid rgba(236,72,153,.7)";
+  };
+  btn.onclick = () => {
+    selectedSeconds = +btn.dataset.seconds;
+    update();
+    setStatus(`Clip length set to ${selectedSeconds}s`);
+  };
+  if(+btn.dataset.seconds === selectedSeconds) update();
+});
+
+$("imgFile").onchange = e => {
+  const f = e.target.files?.[0];
+  if(!f) return;
+  womanFile = f;
+  womanPreview.src = URL.createObjectURL(f);
+  show("womanCard", true);
+  setDot("img","ok","Woman ready");
+  setStatus("Woman selected");
+};
+
+async function recordSquareClip(){
+  if(!stream){
+    await openCamera();
+    if(!stream) return;
+  }
+  if(!womanFile){
+    setLog("Choose a woman first, then record your short driving clip.");
+    return;
+  }
+  const mimeType = chooseMimeType();
+  if(!mimeType){
+    setLog("This browser does not support a usable video recording format for Burst AI.");
+    return;
+  }
+
+  chunks = [];
+  recCanvas.width = 512;
+  recCanvas.height = 512;
+  const outStream = recCanvas.captureStream(24);
+
+  const audioTrack = stream.getAudioTracks()[0];
+  if(audioTrack){
+    try{ outStream.addTrack(audioTrack); }catch(_){}
+  }
+
+  recorder = new MediaRecorder(outStream, mimeType ? {mimeType} : undefined);
+  recorder.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+  recorder.onerror = e => console.error("Recorder error", e);
+
+  let stopped = false;
+  recorder.onstop = async () => {
+    if(stopped) return;
+    stopped = true;
+    clipBlob = new Blob(chunks, {type: recorder.mimeType || mimeType || "video/webm"});
+    const ext = clipBlob.type.includes("mp4") ? "mp4" : "webm";
+    clipFile = new File([clipBlob], `driving_clip.${ext}`, {type: clipBlob.type});
+    if(clipURL) URL.revokeObjectURL(clipURL);
+    clipURL = URL.createObjectURL(clipBlob);
+    clipPreview.src = clipURL;
+    show("clipCard", true);
+    setDot("clip","ok","Clip ready");
+    setStatus("Clip recorded");
+    setBar(0);
+    setLog(`Clip recorded successfully. You can now tap <b>Render AI</b>. Format: <span class="mono">${clipBlob.type || ext}</span>.`);
+  };
+
+  recorder.start(500);
+  $("recordBtn").disabled = true;
+  setStatus("Recording…");
+  setDot("clip","warn","Recording");
+  setLog(`Recording a <b>${selectedSeconds}-second</b> square clip. Blink, smile, and move your head gently.`);
+
+  const start = performance.now();
+  const endAt = start + selectedSeconds * 1000;
+
+  while(performance.now() < endAt){
+    if(video.readyState >= 2){
+      const {sx, sy, size} = getSquareSourceRect();
+      recCtx.save();
+      recCtx.clearRect(0,0,recCanvas.width,recCanvas.height);
+      if($("mirror").checked){
+        recCtx.translate(recCanvas.width, 0);
+        recCtx.scale(-1, 1);
+      }
+      recCtx.drawImage(video, sx, sy, size, size, 0, 0, recCanvas.width, recCanvas.height);
+      recCtx.restore();
+    }
+    const pct = ((performance.now() - start) / (selectedSeconds * 1000)) * 100;
+    setBar(pct);
+    await sleep(1000 / 24);
+  }
+  if(recorder.state !== "inactive") recorder.stop();
+  $("recordBtn").disabled = false;
+}
+
+$("recordBtn").onclick = recordSquareClip;
+
+async function getClient(){
+  if(client) return client;
+  setDot("hf","warn","Connecting");
+  setStatus("Connecting to LivePortrait…");
+  client = await Client.connect(SPACE_ID);
+  setDot("hf","ok","Connected");
+  return client;
+}
+
+function extractUrlsDeep(node, arr=[]){
+  if(!node) return arr;
+  if(typeof node === "string"){
+    if(/^https?:\/\//i.test(node) || node.startsWith("blob:")) arr.push(node);
+    return arr;
+  }
+  if(Array.isArray(node)){
+    node.forEach(x=>extractUrlsDeep(x, arr));
+    return arr;
+  }
+  if(typeof node === "object"){
+    if(typeof node.url === "string") arr.push(node.url);
+    if(typeof node.path === "string" && /^https?:\/\//i.test(node.path)) arr.push(node.path);
+    if(node.video) extractUrlsDeep(node.video, arr);
+    if(node.image) extractUrlsDeep(node.image, arr);
+    if(node.data) extractUrlsDeep(node.data, arr);
+    for(const v of Object.values(node)) if(v && typeof v === "object") extractUrlsDeep(v, arr);
+  }
+  return arr;
+}
+
+function chooseVideoUrlFromResult(result){
+  const urls = [...new Set(extractUrlsDeep(result, []))];
+  const videoish = urls.filter(u => /\.(mp4|webm|mov)(\?|$)/i.test(u) || /\/file=/.test(u) || /\/gradio_api\/file=/.test(u));
+  return videoish[0] || urls[0] || null;
+}
+
+async function resolveAnimateEndpoint(app){
+  if(lastApiInfo?.endpoint) return lastApiInfo.endpoint;
+  const api = await app.view_api();
+  lastApiInfo = api;
+
+  const named = api?.named_endpoints || api?.named || api?.named_api || {};
+  const entries = Object.entries(named);
+
+  const score = ([name, info]) => {
+    const n = (name || "").toLowerCase();
+    const params = info?.parameters || info?.inputs || [];
+    let s = 0;
+    if(n.includes("execute_video")) s += 100;
+    if(n.includes("animate")) s += 60;
+    if(n.includes("video")) s += 40;
+    if((params?.length || 0) === 5) s += 25;
+    return s;
+  };
+
+  if(entries.length){
+    entries.sort((a,b)=>score(b)-score(a));
+    if(score(entries[0]) > 0) return entries[0][0];
+  }
+
+  // Common fallback guesses
+  const common = ["/gpu_wrapped_execute_video", "/predict", "/animate"];
+  for(const c of common) return c;
+  return "/predict";
+}
+
+async function renderBurstAI(){
+  if(!womanFile){
+    setLog("Choose a woman photo first.");
+    return;
+  }
+  if(!clipFile){
+    setLog("Record a short driving clip first.");
+    return;
+  }
+
+  $("renderBtn").disabled = true;
+  setBar(8);
+  setDot("queue","warn","Queueing");
+  setStatus("Queueing Burst AI render…");
+  setLog("Connecting to the official LivePortrait demo and preparing your job. This can take a moment on free ZeroGPU.");
+  show("resultCard", false);
+
+  try{
+    const app = await getClient();
+    const endpoint = await resolveAnimateEndpoint(app);
+    setBar(18);
+    setLog(`Connected. Sending files to <span class="mono">${SPACE_ID}</span> and requesting the animation. Endpoint guess: <span class="mono">${endpoint}</span>`);
+
+    const args = [
+      handle_file(womanFile),
+      handle_file(clipFile),
+      $("relative").checked,
+      $("crop").checked,
+      $("pasteback").checked
+    ];
+
+    let result;
+    try{
+      result = await app.predict(endpoint, args);
+    }catch(primaryErr){
+      console.warn("Primary endpoint failed, retrying /predict", primaryErr);
+      setLog(`Primary endpoint failed. Retrying with <span class="mono">/predict</span>…`);
+      result = await app.predict("/predict", args);
+    }
+
+    setBar(85);
+    const url = chooseVideoUrlFromResult(result);
+    if(!url){
+      throw new Error("The Space returned a response, but no video URL could be found.");
+    }
+
+    if(resultURL && resultURL.startsWith("blob:")) URL.revokeObjectURL(resultURL);
+    resultURL = url;
+    resultVideo.src = resultURL;
+    $("saveLink").href = resultURL;
+    show("resultCard", true);
+    setDot("queue","ok","Done");
+    setStatus("Burst AI render finished");
+    setBar(100);
+    setLog("Done. Your animated result is ready below. If the result took too long or failed, try a shorter 2-second clip or try again later when the free queue is lighter.");
+  }catch(err){
+    console.error(err);
+    setDot("queue","warn","Failed");
+    setStatus("Burst AI failed");
+    setBar(0);
+    const text = (err?.message || String(err)).replace(/</g,"&lt;");
+    setLog(`<b>Render failed.</b> ${text}<br><br>Common reasons: the free queue is busy, your Hugging Face quota is temporarily exhausted, the Space changed its API, or the browser rejected the upload. Try a 2-second clip first.`);
+  }finally{
+    $("renderBtn").disabled = false;
+  }
+}
+
+$("renderBtn").onclick = renderBurstAI;
+
+$("shareBtn").onclick = async () => {
+  const href = $("saveLink").href;
+  if(!href || href === "#") return;
+  try{
+    if(navigator.share){
+      await navigator.share({ title:"Face Studio Burst AI", url: href });
+    }else{
+      setLog("This browser doesn't support the Share API. Use Save video instead.");
+    }
+  }catch(e){}
+};
+
+window.addEventListener("beforeunload", () => {
+  stream?.getTracks().forEach(t=>t.stop());
+  if(clipURL) URL.revokeObjectURL(clipURL);
+});
+
+setDot("cam", null, "Camera");
+setDot("hf", "warn", "LivePortrait");
+setDot("img", null, "Woman");
+setDot("clip", null, "Clip");
+setDot("queue", null, "Idle");
+setStatus("Ready — choose a woman, open the camera, record 2–5 seconds, then render.");
+</script>
+</body>
+</html>
